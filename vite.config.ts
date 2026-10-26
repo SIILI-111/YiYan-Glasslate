@@ -1,11 +1,11 @@
 import { defineConfig } from "vite";
+import { resolve } from "node:path";
 // @ts-expect-error type error without @types/node package
 import process from "node:process";
 const host = process.env.TAURI_DEV_HOST;
 
 // https://vite.dev/config/
 export default defineConfig(() => ({
-
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
   // 1. prevent Vite from obscuring rust errors
@@ -25,6 +25,16 @@ export default defineConfig(() => ({
     watch: {
       // 3. tell Vite to ignore watching `src-tauri`
       ignored: ["**/src-tauri/**"],
+    },
+  },
+  build: {
+    rollupOptions: {
+      // 三个窗口三个入口：主窗、全屏遮罩、设置
+      input: {
+        main: resolve(import.meta.dirname, "index.html"),
+        overlay: resolve(import.meta.dirname, "overlay.html"),
+        settings: resolve(import.meta.dirname, "settings.html"),
+      },
     },
   },
 }));

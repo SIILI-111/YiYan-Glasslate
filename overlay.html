@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>选择区域</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: transparent;
+        cursor: crosshair;
+        user-select: none;
+      }
+      #dim {
+        position: fixed;
+        inset: 0;
+        /* 注意：0.28 的暗度在深色桌面上几乎看不出来，别据此以为遮罩没渲染。
+           想确认遮罩是否真的盖住了屏幕，临时改成 rgba(255,0,0,0.5) 最直观。 */
+        background: rgba(8, 10, 14, 0.28);
+      }
+      #sel {
+        position: fixed;
+        display: none;
+        border: 1px solid rgba(126, 231, 255, 0.95);
+        box-shadow:
+          0 0 0 1px rgba(0, 0, 0, 0.35),
+          0 0 24px rgba(126, 231, 255, 0.25) inset;
+        background: rgba(126, 231, 255, 0.06);
+      }
+      #size {
+        position: fixed;
+        display: none;
+        padding: 2px 6px;
+        border-radius: 5px;
+        font: 12px/1.4 "Segoe UI Variable", "Microsoft YaHei UI", sans-serif;
+        color: #e8f6ff;
+        background: rgba(10, 14, 20, 0.82);
+        border: 1px solid rgba(126, 231, 255, 0.35);
+        pointer-events: none;
+        white-space: nowrap;
+      }
+      #hint {
+        position: fixed;
+        left: 50%;
+        bottom: 6vh;
+        transform: translateX(-50%);
+        padding: 6px 14px;
+        border-radius: 999px;
+        font: 13px/1.6 "Segoe UI Variable", "Microsoft YaHei UI", sans-serif;
+        color: #d8e6f5;
+        background: rgba(10, 14, 20, 0.78);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        pointer-events: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="dim"></div>
+    <div id="sel"></div>
+    <div id="size"></div>
+    <div id="hint">拖动框选要翻译的区域 · Esc 取消</div>
+    <script type="module" src="/src/overlay.ts"></script>
+  </body>
+</html>

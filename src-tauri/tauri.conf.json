@@ -14,13 +14,14 @@
     "windows": [
       {
         "label": "main",
-        "title": "YiYan Glasslate M0 Lab",
-        "width": 760,
-        "height": 520,
+        "title": "一眼 Glasslate",
+        "width": 640,
+        "height": 420,
         "center": true,
         "transparent": true,
         "decorations": false,
         "alwaysOnTop": true,
+        "skipTaskbar": true,
         "shadow": false,
         "resizable": true
       }

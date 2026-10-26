@@ -2,68 +2,70 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <link rel="stylesheet" href="/src/styles.css" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>一眼 Glasslate · M0 实验室</title>
-    <script type="module" src="/src/main.ts" defer></script>
+    <title>一眼 Glasslate</title>
+    <link rel="stylesheet" href="/src/styles.css" />
   </head>
-
-  <body>
-    <div class="app">
-      <header class="titlebar" data-tauri-drag-region>
+  <body class="glass-body">
+    <div id="shell" class="glass">
+      <header class="bar" data-tauri-drag-region>
         <span class="dot"></span>
-        <span class="title">一眼 Glasslate · M0 实验室</span>
-        <span class="drag-fill" data-tauri-drag-region></span>
-        <button id="btn-clickthrough" class="pill" title="T2：开启/关闭整窗点击穿透">穿透：关</button>
-        <button id="btn-close" class="icon" title="关闭窗口">✕</button>
+        <span class="title">一眼 Glasslate</span>
+        <nav class="tools" id="tools">
+          <button id="btn-retranslate" class="icon-btn" title="重译（Alt+W）" aria-label="重译">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <path d="M21 12a9 9 0 1 1-3-6.7" />
+              <path d="M21 3v6h-6" />
+            </svg>
+          </button>
+          <button id="btn-copy" class="icon-btn" title="复制译文" aria-label="复制">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <rect x="9" y="9" width="12" height="12" rx="2" />
+              <path d="M5 15V5a2 2 0 0 1 2-2h10" />
+            </svg>
+          </button>
+          <button id="btn-settings" class="icon-btn" title="设置" aria-label="设置">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <circle cx="12" cy="12" r="3" />
+              <path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9 17 7M7 17l-2.1 2.1" />
+            </svg>
+          </button>
+          <button id="btn-close" class="icon-btn" title="关闭（Alt+R）" aria-label="关闭">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <path d="M6 6l12 12M18 6 6 18" />
+            </svg>
+          </button>
+        </nav>
       </header>
 
-      <main class="grid">
-        <section class="card">
-          <h2>T1 透明 / 无边框 / 置顶</h2>
-          <p class="hint">看到这一整块半透明卡片、且没有系统标题栏 = 通过。置顶可用「始终置顶」勾选验证。</p>
-          <ul id="t1-list" class="checks"></ul>
+      <main id="content" class="content">
+        <div class="empty" id="empty">
+          <p class="empty-title">Alt + Q 框选一段文字</p>
+          <p class="empty-hint">译文会盖在原文位置。现在翻译还没接上，先给你看 OCR 认出来的原文。</p>
+          <button class="ghost" id="btn-new">先框一张试试</button>
+        </div>
+
+        <section class="result" id="result" hidden>
+          <div class="result-head">
+            <span id="meta" class="meta"></span>
+            <button class="ghost tiny" id="btn-toggle-raw">原文</button>
+          </div>
+          <div class="lines" id="lines"></div>
+          <pre class="raw" id="raw" hidden></pre>
         </section>
 
-        <section class="card">
-          <h2>T3 坐标与 DPI</h2>
-          <div class="row-split">
-            <pre id="env" class="kv">读取中…</pre>
-            <div class="col-btns">
-              <button id="btn-env" class="btn">刷新</button>
-              <button id="btn-move2" class="btn">移到副屏</button>
-              <button id="btn-move1" class="btn">回主屏</button>
-            </div>
-          </div>
-          <p id="dpi-verdict" class="verdict"></p>
-        </section>
-
-        <section class="card">
-          <h2>T2 点击穿透 + 悬停</h2>
-          <p class="hint">点右上角「穿透」→ 整窗点击穿透；把鼠标移到本窗口顶部 48px 内自动恢复可点（这条就是悬停工具条的雏形）。</p>
-          <div id="strip" class="strip">顶部 48px 悬停区（鼠标进来变绿 = 穿透已关闭）</div>
-          <p id="hover-state" class="verdict">悬停状态：未启动</p>
-        </section>
-
-        <section class="card">
-          <h2>T4 抓屏</h2>
-          <div class="row">
-            <label>x <input id="gx" type="number" /></label>
-            <label>y <input id="gy" type="number" /></label>
-            <label>w <input id="gw" type="number" /></label>
-            <label>h <input id="gh" type="number" /></label>
-          </div>
-          <div class="row">
-            <button id="btn-grab" class="btn">直接抓</button>
-            <button id="btn-hidden" class="btn">隐藏后抓</button>
-            <button id="btn-exclude" class="btn">排除抓取</button>
-          </div>
-          <p id="grab-meta" class="verdict">未抓取</p>
-          <img id="shot" class="shot" alt="" />
+        <section class="error" id="error" hidden>
+          <p class="error-title">没认出文字</p>
+          <p class="error-body" id="error-body"></p>
+          <button class="ghost" id="btn-retry">再框一次</button>
         </section>
       </main>
 
-      <footer class="log"><span id="log">就绪</span></footer>
+      <footer class="foot">
+        <span id="status" class="status">就绪</span>
+        <span id="engine" class="engine"></span>
+      </footer>
     </div>
+    <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

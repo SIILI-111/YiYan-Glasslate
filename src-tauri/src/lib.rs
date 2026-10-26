@@ -1,260 +1,298 @@
-//! 一眼 Glasslate — M0 验证实验室
+//! 一眼 Glasslate — M1 主链路
 //!
-//! 四个验证任务的探针都放在这里：
-//! - T1 透明 / 无边框 / 置顶      → tauri.conf.json 的窗口配置（本文件提供自检信息）
-//! - T2 点击穿透 + 悬停工具条     → set_click_through / start_hover_poll
-//! - T3 多显示器 + DPI 坐标对齐   → env_info（Tauri 视角 vs Win32 视角同屏对比）
-//! - T4 屏幕矩形实时抓取          → grab_rect / grab_hidden / set_exclude_from_capture
+//! 现在的样子：Alt+Q 唤起全屏遮罩 → 框选 → 抓屏 → Windows OCR → 结果显示在主窗口。
+//! 翻译（T8）还没接，所以主窗口先只显示 OCR 出来的原文。
 //!
-//! 所有 Win32 调用都是手写 FFI，刻意不引入 `windows` crate，避免与 Tauri 内部版本打架。
+//! 分层：
+//! - `win32`  Win32 FFI：抓屏、窗口矩形、DPI、点击穿透、排除抓取
+//! - `ocr`    Windows.Media.Ocr（WinRT）
+//! - `lib.rs` 窗口/托盘/快捷键/命令
+
+mod ocr;
+mod win32;
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Instant;
 
-use base64::Engine as _;
 use serde::Serialize;
-use tauri::{Emitter, Manager, WebviewWindow};
+use tauri::{
+    menu::{Menu, MenuItem, PredefinedMenuItem},
+    tray::TrayIconBuilder,
+    AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindow,
+    WebviewWindowBuilder,
+};
+use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
-// ---------------------------------------------------------------- Win32 FFI
+/// 主窗口（结果窗 / 玻璃窗）
+const MAIN: &str = "main";
+/// 全屏选择遮罩
+const OVERLAY: &str = "overlay";
+/// 设置窗
+const SETTINGS: &str = "settings";
 
-type Hwnd = isize;
-
-#[repr(C)]
-#[derive(Default, Clone, Copy)]
-struct Point {
-    x: i32,
-    y: i32,
-}
-
-#[repr(C)]
-#[derive(Default, Clone, Copy, Debug, Serialize)]
-pub struct Rect {
-    pub left: i32,
-    pub top: i32,
-    pub right: i32,
-    pub bottom: i32,
-}
-
-#[allow(dead_code)]
-impl Rect {
-    fn width(&self) -> i32 {
-        self.right - self.left
-    }
-    fn height(&self) -> i32 {
-        self.bottom - self.top
-    }
-    fn contains(&self, x: i32, y: i32) -> bool {
-        x >= self.left && x < self.right && y >= self.top && y < self.bottom
-    }
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct MonitorInfo {
-    cb_size: u32,
-    rc_monitor: Rect,
-    rc_work: Rect,
-    flags: u32,
-}
-
-#[repr(C)]
-struct BitmapInfoHeader {
-    size: u32,
-    width: i32,
-    height: i32,
-    planes: u16,
-    bit_count: u16,
-    compression: u32,
-    size_image: u32,
-    x_pels_per_meter: i32,
-    y_pels_per_meter: i32,
-    clr_used: u32,
-    clr_important: u32,
-}
-
-#[repr(C)]
-struct RgbQuad {
-    b: u8,
-    g: u8,
-    r: u8,
-    a: u8,
-}
-
-#[repr(C)]
-struct BitmapInfo {
-    header: BitmapInfoHeader,
-    colors: [RgbQuad; 1],
-}
-
-#[link(name = "user32")]
-extern "system" {
-    fn GetCursorPos(p: *mut Point) -> i32;
-    fn GetWindowRect(h: Hwnd, r: *mut Rect) -> i32;
-    fn GetDC(h: Hwnd) -> isize;
-    fn ReleaseDC(h: Hwnd, dc: isize) -> i32;
-    fn GetSystemMetrics(index: i32) -> i32;
-    fn SetWindowDisplayAffinity(h: Hwnd, affinity: u32) -> i32;
-    fn GetDpiForWindow(h: Hwnd) -> u32;
-    fn MonitorFromWindow(h: Hwnd, flags: u32) -> isize;
-    fn GetMonitorInfoW(monitor: isize, info: *mut MonitorInfo) -> i32;
-}
-
-#[link(name = "gdi32")]
-extern "system" {
-    fn CreateCompatibleDC(dc: isize) -> isize;
-    fn CreateCompatibleBitmap(dc: isize, w: i32, h: i32) -> isize;
-    fn SelectObject(dc: isize, obj: isize) -> isize;
-    fn BitBlt(dst: isize, x: i32, y: i32, w: i32, h: i32, src: isize, sx: i32, sy: i32, rop: u32) -> i32;
-    fn GetDIBits(dc: isize, bmp: isize, start: u32, lines: u32, bits: *mut u8, info: *mut BitmapInfo, usage: u32) -> i32;
-    fn DeleteObject(obj: isize) -> i32;
-    fn DeleteDC(dc: isize) -> i32;
-}
-
-const SRCCOPY: u32 = 0x00CC_0020;
-const CAPTUREBLT: u32 = 0x4000_0000;
-const WDA_EXCLUDEFROMCAPTURE: u32 = 0x0000_0011;
-const WDA_NONE: u32 = 0x0000_0000;
-
-fn hwnd_of(window: &WebviewWindow) -> Result<Hwnd, String> {
+fn hwnd_of(window: &WebviewWindow) -> Result<win32::Hwnd, String> {
     window
         .hwnd()
-        .map(|h| h.0 as Hwnd)
+        .map(|h| h.0 as win32::Hwnd)
         .map_err(|e| format!("拿不到 HWND: {e}"))
 }
 
-fn cursor_pos() -> Point {
-    let mut p = Point::default();
-    unsafe { GetCursorPos(&mut p) };
-    p
-}
-
-// ---------------------------------------------------------------- 环境信息
-
-#[derive(Serialize)]
-struct MonitorInfoDto {
-    name: Option<String>,
-    /// Tauri 报告的逻辑坐标与尺寸
-    logical_pos: (i32, i32),
-    logical_size: (u32, u32),
-    /// 逻辑尺寸 × scale = 物理像素
-    scale: f64,
-    physical_size_est: (f64, f64),
-}
-
-#[derive(Serialize)]
-struct EnvInfo {
-    hwnd: isize,
-    dpi_awareness_note: String,
-    /// Tauri 视角
-    tauri_outer_position: (i32, i32),
-    tauri_outer_size: (u32, u32),
-    tauri_scale_factor: f64,
-    tauri_inner_size: (u32, u32),
-    /// Win32 视角（物理像素，PA 进程下 GetWindowRect 返回物理像素）
-    win32_window_rect: Rect,
-    win32_dpi_for_window: u32,
-    win32_window_monitor: Rect,
-    win32_window_monitor_work: Rect,
-    /// 光标（物理像素）
-    cursor: (i32, i32),
-    /// 虚拟桌面（物理像素）
-    virtual_screen: Rect,
-    monitors: Vec<MonitorInfoDto>,
-}
-
-#[tauri::command]
-fn env_info(window: WebviewWindow) -> Result<EnvInfo, String> {
-    let hwnd = hwnd_of(&window)?;
-
-    let mut rect = Rect::default();
-    let mut monitor_rect = Rect::default();
-    let mut work_rect = Rect::default();
-    let dpi: u32;
-    unsafe {
-        GetWindowRect(hwnd, &mut rect);
-        dpi = GetDpiForWindow(hwnd);
-        let mon = MonitorFromWindow(hwnd, 2 /* MONITOR_DEFAULTTONEAREST */);
-        let mut info = MonitorInfo {
-            cb_size: std::mem::size_of::<MonitorInfo>() as u32,
-            rc_monitor: Rect::default(),
-            rc_work: Rect::default(),
-            flags: 0,
-        };
-        if GetMonitorInfoW(mon, &mut info) != 0 {
-            monitor_rect = info.rc_monitor;
-            work_rect = info.rc_work;
-        }
+/// 让窗口不进入任何截屏画面。我们自己的窗口（遮罩、结果窗）都必须这样，
+/// 否则「框选 → 抓屏」会把遮罩自己也抓进去。实测零闪烁、零往返开销。
+///
+/// 调试时设环境变量 `GLASSLATE_CAPTURABLE=1` 可以关掉这个行为，
+/// 否则用截图工具验证界面时**根本看不到自己的窗口**（这也是它生效的旁证）。
+fn exclude_from_capture(window: &WebviewWindow) -> bool {
+    if std::env::var("GLASSLATE_CAPTURABLE").is_ok() {
+        return false;
     }
+    match hwnd_of(window) {
+        Ok(h) => win32::set_exclude_from_capture(h, true),
+        Err(_) => false,
+    }
+}
 
-    let virtual_screen = unsafe {
-        Rect {
-            left: GetSystemMetrics(76),                                // SM_XVIRTUALSCREEN
-            top: GetSystemMetrics(77),                                 // SM_YVIRTUALSCREEN
-            right: GetSystemMetrics(76) + GetSystemMetrics(78),        // + SM_CXVIRTUALSCREEN
-            bottom: GetSystemMetrics(77) + GetSystemMetrics(79),       // + SM_CYVIRTUALSCREEN
-        }
-    };
+// ---------------------------------------------------------------- 遮罩框选（T6）
 
-    let outer_position = window.outer_position().map_err(|e| e.to_string())?;
-    let outer_size = window.outer_size().map_err(|e| e.to_string())?;
-    let inner_size = window.inner_size().map_err(|e| e.to_string())?;
-    let scale = window.scale_factor().map_err(|e| e.to_string())?;
+/// 遮罩窗口的物理坐标与缩放，前端据此把 CSS 坐标换算成屏幕物理坐标
+#[derive(Serialize, Clone)]
+struct OverlayGeo {
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    dpr: f64,
+}
 
-    let monitors = window
-        .available_monitors()
-        .unwrap_or_default()
-        .iter()
-        .map(|m| {
-            let p = m.position();
-            let s = m.size();
-            MonitorInfoDto {
-                name: m.name().cloned(),
-                logical_pos: (p.x, p.y),
-                logical_size: (s.width, s.height),
-                scale: m.scale_factor(),
-                physical_size_est: (
-                    s.width as f64 * m.scale_factor(),
-                    s.height as f64 * m.scale_factor(),
-                ),
-            }
-        })
-        .collect();
-
-    let c = cursor_pos();
-    Ok(EnvInfo {
-        hwnd,
-        dpi_awareness_note: "Rust 进程 DPI 感知级别见 GetProcessDpiAwareness；这里 GetWindowRect 返回物理像素".into(),
-        tauri_outer_position: (outer_position.x, outer_position.y),
-        tauri_outer_size: (outer_size.width, outer_size.height),
-        tauri_scale_factor: scale,
-        tauri_inner_size: (inner_size.width, inner_size.height),
-        win32_window_rect: rect,
-        win32_dpi_for_window: dpi,
-        win32_window_monitor: monitor_rect,
-        win32_window_monitor_work: work_rect,
-        cursor: (c.x, c.y),
-        virtual_screen,
-        monitors,
+fn position_overlay(window: &WebviewWindow) -> Result<OverlayGeo, String> {
+    let vs = win32::virtual_screen();
+    window
+        .set_position(PhysicalPosition::new(vs.left, vs.top))
+        .map_err(|e| e.to_string())?;
+    window
+        .set_size(PhysicalSize::new(vs.width() as u32, vs.height() as u32))
+        .map_err(|e| e.to_string())?;
+    let dpr = window.scale_factor().map_err(|e| e.to_string())?;
+    Ok(OverlayGeo {
+        x: vs.left,
+        y: vs.top,
+        w: vs.width(),
+        h: vs.height(),
+        dpr,
     })
 }
 
-// ---------------------------------------------------------------- T2 点击穿透
+fn show_overlay(app: &AppHandle) -> Result<(), String> {
+    let window = match app.get_webview_window(OVERLAY) {
+        Some(w) => w,
+        None => {
+            let vs = win32::virtual_screen();
+            let w = WebviewWindowBuilder::new(app, OVERLAY, WebviewUrl::App("overlay.html".into()))
+                .title("Glasslate Select")
+                .decorations(false)
+                .transparent(true)
+                .always_on_top(true)
+                .skip_taskbar(true)
+                .shadow(false)
+                .resizable(false)
+                .visible(false)
+                .focused(false)
+                .build()
+                .map_err(|e| format!("创建遮罩窗口失败: {e}"))?;
+            w.set_position(PhysicalPosition::new(vs.left, vs.top))
+                .map_err(|e| e.to_string())?;
+            w.set_size(PhysicalSize::new(vs.width() as u32, vs.height() as u32))
+                .map_err(|e| e.to_string())?;
+            w
+        }
+    };
+    exclude_from_capture(&window);
+    let geo = position_overlay(&window)?;
+    window.show().map_err(|e| e.to_string())?;
+    window.set_focus().map_err(|e| e.to_string())?;
+    let _ = app.emit_to(OVERLAY, "overlay-ready", geo);
+    Ok(())
+}
+
+/// 调试用：直接抓一块屏幕物理矩形做 OCR，返回纯文本（不经过遮罩、不需要鼠标）。
+/// 用来在无人值守环境里验证「物理坐标 → 抓屏 → OCR」这一段。
+#[tauri::command]
+fn ocr_rect(x: i32, y: i32, w: i32, h: i32) -> Result<String, String> {
+    let bgra = win32::capture_rect_bgra(x, y, w, h)?;
+    let r = ocr::recognize_bgra(&bgra, w, h, None)?;
+    let text = r
+        .lines
+        .iter()
+        .map(|l| l.text.clone())
+        .collect::<Vec<_>>()
+        .join("\n");
+    Ok(format!("{}ms|{}", r.ms, text))
+}
+
+/// 无人值守自检用：从 GLASSLATE_SELFTEST="x,y,w,h" 读矩形
+#[tauri::command]
+fn selftest_rect() -> Option<Vec<i32>> {
+    let raw = std::env::var("GLASSLATE_SELFTEST").ok()?;
+    let parts: Vec<i32> = raw
+        .split(',')
+        .filter_map(|s| s.trim().parse().ok())
+        .collect();
+    if parts.len() == 4 {
+        Some(parts)
+    } else {
+        None
+    }
+}
 
 #[tauri::command]
-fn set_click_through(window: WebviewWindow, enable: bool) -> Result<bool, String> {
+fn debug_log(msg: String) {
+    eprintln!("[webview] {msg}");
+}
+
+#[tauri::command]
+fn overlay_geo(window: WebviewWindow) -> Result<OverlayGeo, String> {
+    let rect = win32::window_rect(hwnd_of(&window)?);
+    let dpr = window.scale_factor().map_err(|e| e.to_string())?;
+    Ok(OverlayGeo {
+        x: rect.left,
+        y: rect.top,
+        w: rect.width(),
+        h: rect.height(),
+        dpr,
+    })
+}
+
+#[tauri::command]
+fn cancel_selection(app: AppHandle) -> Result<(), String> {
+    if let Some(w) = app.get_webview_window(OVERLAY) {
+        w.hide().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// 框选结束：抓这块屏幕 → OCR → 把结果推给主窗
+#[tauri::command]
+fn finish_selection(app: AppHandle, x: i32, y: i32, w: i32, h: i32) -> Result<(), String> {
+    if w < 8 || h < 8 {
+        return cancel_selection(app);
+    }
+    let started = std::time::Instant::now();
+
+    // 遮罩已经设了 WDA_EXCLUDEFROMCAPTURE，抓屏时它天然不在画面里，不用先隐藏
+    let bgra = win32::capture_rect_bgra(x, y, w, h)?;
+    let cap_ms = started.elapsed().as_millis();
+
+    if let Some(ov) = app.get_webview_window(OVERLAY) {
+        let _ = ov.hide();
+    }
+
+    match ocr::recognize_bgra(&bgra, w, h, None) {
+        Ok(result) => {
+            let main = ensure_main(&app)?;
+            let _ = main.show();
+            let _ = main.set_focus();
+            let payload = serde_json::json!({
+                "rect": { "x": x, "y": y, "w": w, "h": h },
+                "capture_ms": cap_ms,
+                "total_ms": started.elapsed().as_millis(),
+                "lines": result.lines,
+                "words": result.words,
+                "image": { "w": result.width, "h": result.height },
+                "engine_lang": result.engine_lang,
+                "ocr_ms": result.ms,
+            });
+            let _ = app.emit_to(MAIN, "ocr-result", payload);
+            Ok(())
+        }
+        Err(e) => {
+            let _ = app.emit_to(MAIN, "ocr-failed", serde_json::json!({ "message": e }));
+            Err(e)
+        }
+    }
+}
+
+// ---------------------------------------------------------------- 主窗（结果窗）
+
+fn ensure_main(app: &AppHandle) -> Result<WebviewWindow, String> {
+    app.get_webview_window(MAIN)
+        .ok_or_else(|| "主窗口不存在".to_string())
+}
+
+#[tauri::command]
+fn start_selection(app: AppHandle) -> Result<(), String> {
+    show_overlay(&app)
+}
+
+#[tauri::command]
+fn show_main(app: AppHandle) -> Result<(), String> {
+    let w = ensure_main(&app)?;
+    w.show().map_err(|e| e.to_string())?;
+    w.set_focus().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn hide_main(app: AppHandle) -> Result<(), String> {
+    ensure_main(&app)?.hide().map_err(|e| e.to_string())
+}
+
+/// 设置窗：只创建一次，之后复用
+#[tauri::command]
+fn show_settings(app: AppHandle) -> Result<(), String> {
+    if let Some(w) = app.get_webview_window(SETTINGS) {
+        w.show().map_err(|e| e.to_string())?;
+        w.set_focus().map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+    let w = WebviewWindowBuilder::new(&app, SETTINGS, WebviewUrl::App("settings.html".into()))
+        .title("一眼 Glasslate · 设置")
+        .inner_size(520.0, 420.0)
+        .decorations(false)
+        .transparent(true)
+        .shadow(false)
+        .resizable(true)
+        .center()
+        .build()
+        .map_err(|e| format!("创建设置窗口失败: {e}"))?;
+    let _ = w.set_focus();
+    Ok(())
+}
+
+/// Alt+E：整窗点击穿透开关（隐形态）。工具条的悬停恢复由前端轮询控制。
+#[tauri::command]
+fn set_glass_click_through(
+    window: WebviewWindow,
+    enable: bool,
+    app: AppHandle,
+) -> Result<bool, String> {
     window
         .set_ignore_cursor_events(enable)
         .map_err(|e| e.to_string())?;
+    // 客观证据：穿透在 Windows 上最终体现为 WS_EX_TRANSPARENT(0x20)，往往还带 LAYERED
+    if let Ok(h) = hwnd_of(&window) {
+        let ex = win32::ex_style(h);
+        let transparent = (ex & 0x20) != 0;
+        let layered = (ex & 0x8_0000) != 0;
+        let _ = app.emit_to(
+            MAIN,
+            "click-through-state",
+            serde_json::json!({
+                "enable": enable,
+                "ex_style": format!("0x{ex:08X}"),
+                "transparent": transparent,
+                "layered": layered,
+            }),
+        );
+        eprintln!("[click-through] enable={enable} ex=0x{ex:08X} transparent={transparent} layered={layered}");
+    }
     Ok(enable)
 }
 
 static HOVER_RUNNING: AtomicBool = AtomicBool::new(false);
 
-/// 悬停工具条 + 点击穿透的联合方案：
-/// 鼠标进窗口顶部 strip 高度内 → 关掉穿透（工具条可点）；否则打开穿透（点穿到下面）。
-/// 线程每 40ms 轮询一次光标，状态变化时通过事件通知前端。
+/// 顶部条带悬停检测：鼠标进条带 → 关掉穿透让工具条可点；离开 → 恢复穿透。
+/// 40ms 轮询，够用且不占 CPU。
 #[tauri::command]
-fn start_hover_poll(window: WebviewWindow, strip_height: i32) -> Result<(), String> {
+fn start_strip_hover(window: WebviewWindow, strip_height: i32) -> Result<(), String> {
     if HOVER_RUNNING.swap(true, Ordering::SeqCst) {
         return Ok(());
     }
@@ -263,24 +301,18 @@ fn start_hover_poll(window: WebviewWindow, strip_height: i32) -> Result<(), Stri
     std::thread::spawn(move || {
         let mut last_inside = false;
         while HOVER_RUNNING.load(Ordering::SeqCst) {
-            let hwnd = match win.hwnd() {
-                Ok(h) => h.0 as Hwnd,
-                Err(_) => break,
-            };
-            let mut rect = Rect::default();
-            unsafe { GetWindowRect(hwnd, &mut rect) };
-            let c = cursor_pos();
-            let strip = Rect {
-                left: rect.left,
-                top: rect.top,
-                right: rect.right,
-                bottom: rect.top + strip_height,
-            };
-            let inside = strip.contains(c.x, c.y);
+            let Ok(h) = win.hwnd() else { break };
+            let rect = win32::window_rect(h.0 as win32::Hwnd);
+            let c = win32::cursor_pos();
+            let inside = c.x >= rect.left
+                && c.x < rect.right
+                && c.y >= rect.top
+                && c.y < rect.top + strip_height;
             if inside != last_inside {
                 last_inside = inside;
                 let _ = win.set_ignore_cursor_events(!inside);
-                let _ = app.emit(
+                let _ = app.emit_to(
+                    MAIN,
                     "strip-hover",
                     serde_json::json!({ "inside": inside, "cursor": [c.x, c.y] }),
                 );
@@ -293,177 +325,38 @@ fn start_hover_poll(window: WebviewWindow, strip_height: i32) -> Result<(), Stri
 }
 
 #[tauri::command]
-fn stop_hover_poll(window: WebviewWindow) -> Result<(), String> {
+fn stop_strip_hover(window: WebviewWindow) -> Result<(), String> {
     HOVER_RUNNING.store(false, Ordering::SeqCst);
-    window.set_ignore_cursor_events(false).map_err(|e| e.to_string())?;
-    Ok(())
+    window.set_ignore_cursor_events(false).map_err(|e| e.to_string())
 }
 
-// ---------------------------------------------------------------- T4 抓屏
+// ---------------------------------------------------------------- 诊断
 
-#[derive(Serialize)]
-struct GrabResult {
-    ms: u128,
-    width: i32,
-    height: i32,
-    png_base64: String,
-    saved_to: String,
-    note: String,
-}
-
-fn capture_rect_bgra(x: i32, y: i32, w: i32, h: i32) -> Result<Vec<u8>, String> {
-    if w <= 0 || h <= 0 {
-        return Err("宽高必须为正".into());
-    }
-    unsafe {
-        let screen = GetDC(0);
-        if screen == 0 {
-            return Err("GetDC(NULL) 失败".into());
-        }
-        let mem = CreateCompatibleDC(screen);
-        let bmp = CreateCompatibleBitmap(screen, w, h);
-        if mem == 0 || bmp == 0 {
-            ReleaseDC(0, screen);
-            return Err("创建内存 DC/位图失败".into());
-        }
-        let old = SelectObject(mem, bmp);
-        // CAPTUREBLT 让 layered 窗口也进画面（正是我们想验证的"会不会截到自己"）
-        let ok = BitBlt(mem, 0, 0, w, h, screen, x, y, SRCCOPY | CAPTUREBLT);
-        let mut buf = vec![0u8; (w * h * 4) as usize];
-        let mut info = BitmapInfo {
-            header: BitmapInfoHeader {
-                size: std::mem::size_of::<BitmapInfoHeader>() as u32,
-                width: w,
-                height: -h, // 负值 = 自上而下
-                planes: 1,
-                bit_count: 32,
-                compression: 0,
-                size_image: (w * h * 4) as u32,
-                x_pels_per_meter: 0,
-                y_pels_per_meter: 0,
-                clr_used: 0,
-                clr_important: 0,
-            },
-            colors: [RgbQuad { b: 0, g: 0, r: 0, a: 0 }],
-        };
-        let lines = if ok != 0 {
-            GetDIBits(
-                mem,
-                bmp,
-                0,
-                h as u32,
-                buf.as_mut_ptr(),
-                &mut info,
-                0,
-            )
-        } else {
-            0
-        };
-        SelectObject(mem, old);
-        DeleteObject(bmp);
-        DeleteDC(mem);
-        ReleaseDC(0, screen);
-        if ok == 0 {
-            return Err("BitBlt 失败".into());
-        }
-        if lines == 0 {
-            return Err("GetDIBits 失败".into());
-        }
-        Ok(buf)
-    }
-}
-
-fn bgra_to_png_base64(buf: &[u8], w: i32, h: i32) -> Result<(String, String), String> {
-    let mut rgba = buf.to_vec();
-    for chunk in rgba.chunks_exact_mut(4) {
-        chunk.swap(0, 2); // BGRA -> RGBA
-        chunk[3] = 255;   // BitBlt 出来的 alpha 不可信，统一按不透明处理
-    }
-    let img = image::RgbaImage::from_raw(w as u32, h as u32, rgba)
-        .ok_or_else(|| "构造图像失败".to_string())?;
-
-    let dir = std::env::temp_dir().join("glasslate_m0");
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or(0);
-    let path = dir.join(format!("shot_{stamp}.png"));
-    img.save(&path).map_err(|e| e.to_string())?;
-
-    let mut png = std::io::Cursor::new(Vec::new());
-    img.write_to(&mut png, image::ImageFormat::Png)
-        .map_err(|e| e.to_string())?;
-    let b64 = base64::engine::general_purpose::STANDARD.encode(png.into_inner());
-    Ok((b64, path.to_string_lossy().to_string()))
+#[tauri::command]
+fn ocr_languages() -> Result<Vec<String>, String> {
+    ocr::available_languages()
 }
 
 #[tauri::command]
-fn grab_rect(x: i32, y: i32, w: i32, h: i32) -> Result<GrabResult, String> {
-    let start = Instant::now();
-    let buf = capture_rect_bgra(x, y, w, h)?;
-    let cap_ms = start.elapsed().as_millis();
-    let (b64, path) = bgra_to_png_base64(&buf, w, h)?;
-    Ok(GrabResult {
-        ms: cap_ms,
-        width: w,
-        height: h,
-        png_base64: b64,
-        saved_to: path,
-        note: "BitBlt + CAPTUREBLT：叠在上面的窗口（含自己）也会被截进来".into(),
-    })
-}
-
-/// 隐藏 → 等一帧 → 抓 → 恢复：验证"不截到自己"最朴素的做法
-#[tauri::command]
-fn grab_hidden(window: WebviewWindow, x: i32, y: i32, w: i32, h: i32) -> Result<GrabResult, String> {
-    let start = Instant::now();
-    let _ = window.hide();
-    std::thread::sleep(std::time::Duration::from_millis(30));
-    let buf = capture_rect_bgra(x, y, w, h);
-    let _ = window.show();
-    let buf = buf?;
-    let total_ms = start.elapsed().as_millis();
-    let (b64, path) = bgra_to_png_base64(&buf, w, h)?;
-    Ok(GrabResult {
-        ms: total_ms,
-        width: w,
-        height: h,
-        png_base64: b64,
-        saved_to: path,
-        note: "隐藏 30ms 后抓取再显示（含 hide/show 往返耗时）".into(),
-    })
-}
-
-#[tauri::command]
-fn set_exclude_from_capture(window: WebviewWindow, enable: bool) -> Result<String, String> {
+fn env_probe(window: WebviewWindow) -> Result<serde_json::Value, String> {
     let hwnd = hwnd_of(&window)?;
-    let affinity = if enable { WDA_EXCLUDEFROMCAPTURE } else { WDA_NONE };
-    let ok = unsafe { SetWindowDisplayAffinity(hwnd, affinity) };
-    if ok == 0 {
-        Err("SetWindowDisplayAffinity 调用失败（需要 Win10 2004+ 且 DWM 合成开启）".into())
-    } else {
-        Ok(format!(
-            "SetWindowDisplayAffinity({:#x}) 成功：此时 BitBlt 抓屏不会包含本窗口",
-            affinity
-        ))
-    }
+    let rect = win32::window_rect(hwnd);
+    let vs = win32::virtual_screen();
+    Ok(serde_json::json!({
+        "hwnd": hwnd,
+        "window_rect": rect,
+        "dpi": win32::dpi_for_window(hwnd),
+        "monitor": win32::window_monitor(hwnd),
+        "virtual_screen": vs,
+        "scale_factor": window.scale_factor().unwrap_or(1.0),
+    }))
 }
 
-#[tauri::command]
-fn set_window_pos(window: WebviewWindow, x: i32, y: i32) -> Result<(), String> {
-    window
-        .set_position(tauri::PhysicalPosition::new(x, y))
-        .map_err(|e| e.to_string())
-}
-
-/// 把探针数据落盘，方便命令行侧直接读（M0 的证据收集口）
 #[tauri::command]
 fn save_debug(name: String, text: String) -> Result<String, String> {
-    let dir = std::env::temp_dir().join("glasslate_m0");
+    let dir = std::env::temp_dir().join("glasslate");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let len = text.len();
-    if len > 4 * 1024 * 1024 {
+    if text.len() > 4 * 1024 * 1024 {
         return Err("内容过大".into());
     }
     let path = dir.join(name);
@@ -471,21 +364,136 @@ fn save_debug(name: String, text: String) -> Result<String, String> {
     Ok(path.to_string_lossy().to_string())
 }
 
+// ---------------------------------------------------------------- 启动
+
+fn register_shortcuts(app: &AppHandle) {
+    let bindings: [(Shortcut, &str); 4] = [
+        (Shortcut::new(Some(Modifiers::ALT), Code::KeyQ), "new"),
+        (Shortcut::new(Some(Modifiers::ALT), Code::KeyW), "retranslate"),
+        (Shortcut::new(Some(Modifiers::ALT), Code::KeyE), "stealth"),
+        (Shortcut::new(Some(Modifiers::ALT), Code::KeyR), "close"),
+    ];
+    for (sc, action) in bindings {
+        let action = action.to_string();
+        let label = action.clone();
+        let res = app.global_shortcut().on_shortcut(sc, move |app, _sc, event| {
+            if event.state() != ShortcutState::Pressed {
+                return;
+            }
+            match action.as_str() {
+                "new" => {
+                    if let Err(e) = show_overlay(app) {
+                        eprintln!("[hotkey] 唤起遮罩失败: {e}");
+                    }
+                }
+                "retranslate" => {
+                    let _ = app.emit_to(MAIN, "hotkey-retranslate", ());
+                }
+                "stealth" => {
+                    let _ = app.emit_to(MAIN, "hotkey-stealth", ());
+                }
+                "close" => {
+                    if let Some(w) = app.get_webview_window(MAIN) {
+                        let _ = w.hide();
+                    }
+                }
+                _ => {}
+            }
+        });
+        if let Err(e) = res {
+            eprintln!("[hotkey] 注册 {label} 失败: {e}");
+        }
+    }
+}
+
+fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
+    let new_item = MenuItem::with_id(app, "new", "新建截图\tAlt+Q", true, None::<&str>)?;
+    let show_item = MenuItem::with_id(app, "show", "显示结果窗", true, None::<&str>)?;
+    let settings_item = MenuItem::with_id(app, "settings", "设置", true, None::<&str>)?;
+    let quit_item = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
+    let menu = Menu::with_items(
+        app,
+        &[
+            &new_item,
+            &show_item,
+            &settings_item,
+            &PredefinedMenuItem::separator(app)?,
+            &quit_item,
+        ],
+    )?;
+
+    let mut builder = TrayIconBuilder::with_id("glasslate-tray")
+        .tooltip("一眼 Glasslate")
+        .menu(&menu)
+        .show_menu_on_left_click(true)
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            "new" => {
+                let _ = show_overlay(app);
+            }
+            "show" => {
+                if let Some(w) = app.get_webview_window(MAIN) {
+                    let _ = w.show();
+                    let _ = w.set_focus();
+                }
+            }
+            "settings" => {
+                let _ = show_settings(app.clone());
+            }
+            "quit" => app.exit(0),
+            _ => {}
+        });
+
+    if let Some(icon) = app.default_window_icon() {
+        builder = builder.icon(icon.clone());
+    }
+    builder.build(app)?;
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            if let Some(w) = app.get_webview_window(MAIN) {
+                let _ = w.show();
+                let _ = w.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
-            env_info,
-            set_click_through,
-            start_hover_poll,
-            stop_hover_poll,
-            grab_rect,
-            grab_hidden,
-            set_exclude_from_capture,
-            set_window_pos,
+            overlay_geo,
+            debug_log,
+            ocr_rect,
+            selftest_rect,
+            start_selection,
+            cancel_selection,
+            finish_selection,
+            show_main,
+            hide_main,
+            show_settings,
+            set_glass_click_through,
+            start_strip_hover,
+            stop_strip_hover,
+            ocr_languages,
+            env_probe,
             save_debug
         ])
+        .setup(|app| {
+            let handle = app.handle().clone();
+
+            if let Some(main) = app.get_webview_window(MAIN) {
+                // 保险：tauri.conf.json 里写了 decorations:false，但实测启动后
+                // 窗口仍带着系统标题栏（WS_CAPTION 还在）。运行期再压一次，
+                // 顺手确认 shadow 也是关的（无边框窗口带阴影会出现一圈灰边）。
+                let _ = main.set_decorations(false);
+                let _ = main.set_shadow(false);
+                exclude_from_capture(&main);
+            }
+            setup_tray(&handle)?;
+            register_shortcuts(&handle);
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

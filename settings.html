@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>一眼 Glasslate · 设置</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body class="glass-body">
+    <div class="glass settings">
+      <header class="bar" data-tauri-drag-region>
+        <span class="title">设置</span>
+        <nav class="tools">
+          <button id="btn-close" class="icon-btn" title="关闭" aria-label="关闭">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <path d="M6 6l12 12M18 6 6 18" />
+            </svg>
+          </button>
+        </nav>
+      </header>
+
+      <main class="settings-body">
+        <section class="group">
+          <h2>识别（OCR）</h2>
+          <p class="row"><span class="k">引擎</span><span class="v" id="ocr-engine">检测中…</span></p>
+          <p class="row"><span class="k">可用语言</span><span class="v" id="ocr-langs">—</span></p>
+          <p class="note">
+            默认用系统自带的 Windows OCR：零下载、零体积。中文系统只有 zh-Hans 引擎时也能读英文，
+            代价是会吞掉单词间的空格、小字号偶尔把 l 认成 I。
+          </p>
+        </section>
+
+        <section class="group">
+          <h2>翻译</h2>
+          <p class="row"><span class="k">服务商</span><span class="v muted">未接入（M1 第 4 步）</span></p>
+          <p class="row"><span class="k">AccessKey</span><span class="v muted">—</span></p>
+          <p class="note">
+            翻译引擎默认阿里云机器翻译通用版（每月 100 万字符免费），密钥只保存在本机 AppData，
+            不进仓库、不上传。
+          </p>
+        </section>
+
+        <section class="group">
+          <h2>行为</h2>
+          <p class="row"><span class="k">历史记录</span><span class="v muted">开发中</span></p>
+          <p class="row"><span class="k">专注模式</span><span class="v muted">开发中</span></p>
+          <p class="row"><span class="k">抓屏保护</span><span class="v ok">已启用（WDA_EXCLUDEFROMCAPTURE）</span></p>
+        </section>
+
+        <section class="group">
+          <h2>快捷键</h2>
+          <table class="keys">
+            <tr><td>Alt + Q</td><td>新建截图</td></tr>
+            <tr><td>Alt + W</td><td>重译</td></tr>
+            <tr><td>Alt + E</td><td>隐形模式（点击穿透）</td></tr>
+            <tr><td>Alt + R</td><td>关闭结果窗</td></tr>
+            <tr><td>Esc</td><td>取消框选</td></tr>
+          </table>
+        </section>
+      </main>
+    </div>
+    <script type="module" src="/src/settings.ts"></script>
+  </body>
+</html>
