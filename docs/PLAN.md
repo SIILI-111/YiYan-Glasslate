@@ -101,6 +101,29 @@
 
 **做完 M1 需要回写本文档的三件事**：① OCR 实测耗时与语言包检测结论；② 路径 A 还是 B，签名坑记录；③ 异步取消方案（序号校验还是别的）。
 
+### M1 进展（2026-10-26 晚，T5–T7 已实现，T8–T11 未开始）
+
+**已跑通并验证**：
+
+| 项 | 结果 |
+|---|---|
+| 三窗 + 托盘 + 单实例 + 全局快捷键 | Alt+Q 唤起遮罩正常；托盘菜单可用 |
+| 遮罩框选 | 全屏 4480×1600 覆盖、拖框、Esc 取消；`phys = geo.x + cssX * dpr` 换算在 150% 缩放的主屏正确 |
+| 抓屏 | GDI `BitBlt(SRCCOPY\|CAPTUREBLT)`，一次 16–21ms（1320×210 与 1140×780 都在这区间） |
+| OCR | 中文引擎读英文：4 行英文 → 136ms；已知缺陷与 M0 一致（`tool`→`t00 上`、`on`→`0 n`、`Tap`→`Ta p`、`2.14.0`→`2 ． 14 ． 0`） |
+| 无边框 | `tauri.conf.json` 的 `decorations:false` **在 Windows 上不生效**，必须在 `setup` 里再调一次 `set_decorations(false)` + `set_shadow(false)` |
+
+**踩到的坑（已写进代码注释）**：
+
+1. **`decorations: false` 双重设置**：配置文件里写了、窗口仍有 `WS_CAPTION`，运行期再设一次才掉。
+2. **`emit_to` 会丢事件**：Rust 侧 `emit_to(overlay, "overlay-ready", ..)` 常早于遮罩 webview 注册监听 → 遮罩"看着没反应"。改成前端 `await refreshGeo()` 后自己点亮暗层，事件只用于通知。
+3. **透明窗口的暗层很难用肉眼验证**：0.28 的黑色暗度在深色壁纸上几乎看不出来，临时换成 `rgba(255,0,0,0.5)` 才确认"遮罩其实一直在正常渲染"。
+4. **`[hidden]` 被 `display` 顶掉**：给空态/结果块设了 `display:flex` 后 `hidden` 属性失效，两者同屏。加 `[hidden]{display:none !important}` 修掉。
+5. **别在用户正在用的机器上做鼠标自动化验证**：`SetCursorPos` 会和真人抢光标，拖拽被切成"按下即抬起"。改用 `GLASSLATE_SELFTEST="x,y,w,h"` 环境变量让 app 自己抓一块区域跑 OCR，结果写日志——不需要鼠标就能验证 capture→OCR。
+6. **`GLASSLATE_CAPTURABLE=1`**：默认所有窗口都设 `WDA_EXCLUDEFROMCAPTURE`，于是截图工具（包括我们自己的 M0 探针）都看不到 app 自己。调试时才置这个变量放行。
+
+**开发机阻塞（重要，换机器必读）**：Windows 11 的 **Smart App Control（SAC）在强制模式下会拦下所有「新编译、无签名」的 exe**（`os error 4551 / An Application Control policy has blocked this file`），连 `rustc hello.rs` 出来的 30KB 小程序都跑不起来。本机 2026-10-26 20:05 起进入这个状态，已把 `HKLM\SYSTEM\CurrentControlSet\Control\CI\Policy\VerifiedAndReputablePolicyState` 由 1 改为 0（需重启生效）。**换机器开发时先确认 SAC 状态**，否则会以为是自己代码的问题。
+
 ---
 
 ## M2 · 差异化核心（估 20–25h）
