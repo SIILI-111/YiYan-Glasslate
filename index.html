@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="/src/styles.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>一眼 Glasslate · M0 实验室</title>
+    <script type="module" src="/src/main.ts" defer></script>
+  </head>
+
+  <body>
+    <div class="app">
+      <header class="titlebar" data-tauri-drag-region>
+        <span class="dot"></span>
+        <span class="title">一眼 Glasslate · M0 实验室</span>
+        <span class="drag-fill" data-tauri-drag-region></span>
+        <button id="btn-clickthrough" class="pill" title="T2：开启/关闭整窗点击穿透">穿透：关</button>
+        <button id="btn-close" class="icon" title="关闭窗口">✕</button>
+      </header>
+
+      <main class="grid">
+        <section class="card">
+          <h2>T1 透明 / 无边框 / 置顶</h2>
+          <p class="hint">看到这一整块半透明卡片、且没有系统标题栏 = 通过。置顶可用「始终置顶」勾选验证。</p>
+          <ul id="t1-list" class="checks"></ul>
+        </section>
+
+        <section class="card">
+          <h2>T3 坐标与 DPI</h2>
+          <div class="row-split">
+            <pre id="env" class="kv">读取中…</pre>
+            <div class="col-btns">
+              <button id="btn-env" class="btn">刷新</button>
+              <button id="btn-move2" class="btn">移到副屏</button>
+              <button id="btn-move1" class="btn">回主屏</button>
+            </div>
+          </div>
+          <p id="dpi-verdict" class="verdict"></p>
+        </section>
+
+        <section class="card">
+          <h2>T2 点击穿透 + 悬停</h2>
+          <p class="hint">点右上角「穿透」→ 整窗点击穿透；把鼠标移到本窗口顶部 48px 内自动恢复可点（这条就是悬停工具条的雏形）。</p>
+          <div id="strip" class="strip">顶部 48px 悬停区（鼠标进来变绿 = 穿透已关闭）</div>
+          <p id="hover-state" class="verdict">悬停状态：未启动</p>
+        </section>
+
+        <section class="card">
+          <h2>T4 抓屏</h2>
+          <div class="row">
+            <label>x <input id="gx" type="number" /></label>
+            <label>y <input id="gy" type="number" /></label>
+            <label>w <input id="gw" type="number" /></label>
+            <label>h <input id="gh" type="number" /></label>
+          </div>
+          <div class="row">
+            <button id="btn-grab" class="btn">直接抓</button>
+            <button id="btn-hidden" class="btn">隐藏后抓</button>
+            <button id="btn-exclude" class="btn">排除抓取</button>
+          </div>
+          <p id="grab-meta" class="verdict">未抓取</p>
+          <img id="shot" class="shot" alt="" />
+        </section>
+      </main>
+
+      <footer class="log"><span id="log">就绪</span></footer>
+    </div>
+  </body>
+</html>

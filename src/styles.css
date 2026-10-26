@@ -1,0 +1,239 @@
+:root {
+  color-scheme: dark;
+  font-family: "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+  font-size: 13px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: transparent; /* 关键：两层都透明，窗口才能透出桌面 */
+}
+
+.app {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  border-radius: 16px;
+  overflow: hidden;
+  background: rgba(16, 18, 24, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #e7ecf3;
+  backdrop-filter: blur(18px) saturate(1.2);
+}
+
+.titlebar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  user-select: none;
+}
+
+.titlebar .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #4ade80;
+  box-shadow: 0 0 8px #4ade80;
+}
+
+.titlebar .title {
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}
+
+.drag-fill {
+  flex: 1;
+  height: 100%;
+  align-self: stretch;
+}
+
+button {
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.08);
+  color: #e7ecf3;
+  padding: 5px 10px;
+  transition: background 0.15s;
+}
+
+button:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+button.pill.on {
+  background: #f59e0b;
+  border-color: #f59e0b;
+  color: #1a1205;
+  font-weight: 600;
+}
+
+button.icon {
+  padding: 4px 8px;
+  border-color: transparent;
+  background: transparent;
+}
+
+button.icon:hover {
+  background: rgba(239, 68, 68, 0.25);
+}
+
+.grid {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+  gap: 10px;
+  padding: 10px;
+  overflow: hidden;
+}
+
+.card {
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  padding: 10px 12px;
+  overflow: auto;
+  min-height: 0;
+}
+
+.card h2 {
+  margin: 0 0 6px;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: #9fd0ff;
+  letter-spacing: 0.4px;
+}
+
+.hint {
+  margin: 0 0 8px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: #9aa6b6;
+}
+
+.checks {
+  margin: 0;
+  padding-left: 16px;
+  font-size: 11.5px;
+  line-height: 1.7;
+}
+
+.checks .ok {
+  color: #4ade80;
+}
+
+.checks .warn {
+  color: #fbbf24;
+}
+
+.kv {
+  margin: 0;
+  font-family: Consolas, "Cascadia Mono", monospace;
+  font-size: 11px;
+  line-height: 1.55;
+  color: #cbd5e1;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.row-split {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.col-btns {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.row-split .kv {
+  flex: 1;
+  min-width: 0;
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.row label {
+  font-size: 11px;
+  color: #9aa6b6;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+input[type="number"] {
+  width: 62px;
+  padding: 3px 5px;
+  font-size: 11px;
+  font-family: Consolas, monospace;
+  color: #e7ecf3;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 6px;
+}
+
+.verdict {
+  margin: 6px 0 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #fbbf24;
+}
+
+.strip {
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px dashed rgba(255, 255, 255, 0.22);
+  font-size: 11px;
+  color: #9aa6b6;
+  transition: all 0.15s;
+}
+
+.strip.hot {
+  border-color: #4ade80;
+  background: rgba(74, 222, 128, 0.14);
+  color: #4ade80;
+}
+
+.shot {
+  display: none;
+  width: 100%;
+  margin-top: 6px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+.shot.show {
+  display: block;
+}
+
+.log {
+  padding: 5px 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  font-family: Consolas, monospace;
+  font-size: 11px;
+  color: #7f8c9f;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

@@ -1,0 +1,52 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Rust / Tauri build output
+src-tauri/target
+src-tauri/gen/schemas
+
+# 本地配置与密钥（绝不要提交）
+.env
+.env.*
+!.env.example
+*.secret
+*bak*
+config.local.json
+settings.local.json
+
+# 本地数据：历史记录、术语表、截图缓存
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+screenshots/
+shots/
+
+# 开发期脚本产物
+*.png.tmp
+_tmp/
+
