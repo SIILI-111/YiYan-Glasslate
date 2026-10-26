@@ -81,7 +81,6 @@ window.addEventListener("mouseup", async (e) => {
   const w = Math.round(r.w * geo.dpr);
   const h = Math.round(r.h * geo.dpr);
 
-  dim.style.opacity = "0";
   reset();
   void invoke("debug_log", {
     msg: `overlay up css=${r.left},${r.top} ${r.w}x${r.h} -> phys=${x},${y} ${w}x${h} dpr=${geo.dpr}`,
@@ -119,7 +118,8 @@ async function boot() {
     geo = e.payload;
     reset();
   });
-  dim.style.opacity = "1";
+  // 暗层永远保持不透明底；"看不见遮罩" = 窗口被 hide 了，靠窗口显隐控制，
+  // 不用 CSS opacity——否则第二次唤起时页面已加载完、boot 不再执行，暗层永远是 0。
   reset();
   const r = dim.getBoundingClientRect();
   const cs = getComputedStyle(dim);
